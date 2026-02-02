@@ -1,23 +1,77 @@
 import streamlit as st
-import requests
 
-st.title("🎬 TMDB API 테스트")
+# 페이지 설정
+st.set_page_config(page_title="나와 어울리는 영화는?", page_icon="🎬")
 
-# 사이드바에서 API 키 입력
-TMDB_API_KEY = st.sidebar.text_input("TMDB API Key", type="password")
+# 제목
+st.title("🎬 나와 어울리는 영화는?")
+st.write("간단한 질문을 통해 당신과 어울리는 영화 스타일을 알아보세요!")
 
-if TMDB_API_KEY:
-    if st.button("인기 영화 가져오기"):
-        # TMDB에서 인기 영화 가져오기
-        url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=ko-KR"
-        response = requests.get(url)
-        data = response.json()
-        
-        # 첫 번째 영화 정보 출력
-        movie = data['results'][0]
-        st.write(f"🎬 제목: {movie['title']}")
-        st.write(f"⭐ 평점: {movie['vote_average']}/10")
-        st.write(f"📅 개봉일: {movie['release_date']}")
-        st.write(f"📝 줄거리: {movie['overview'][:100]}...")
-else:
-    st.info("사이드바에 TMDB API Key를 입력해주세요.")
+st.divider()
+
+# 질문 1
+q1 = st.radio(
+    "Q1. 주말에 갑자기 하루가 비었다! 너의 선택은?",
+    [
+        "카페에 앉아 음악 들으면서 일기 쓰거나 영화 한 편 몰아보기 ☕",
+        "즉흥으로 여행 가거나 새로운 액티비티 도전 🚗",
+        "집에서 세계관 탄탄한 영화 정주행, 상상력 풀가동 ✨",
+        "친구들이랑 만나서 웃다가 하루 순삭 🤣"
+    ],
+    key="q1"
+)
+
+# 질문 2
+q2 = st.radio(
+    "Q2. 영화 볼 때 가장 중요한 건 뭐야?",
+    [
+        "감정선과 여운, 보고 나서 한참 생각나면 최고 💭",
+        "속도감 있는 전개와 손에 땀 나는 장면 🔥",
+        "“이런 설정을 생각했다고?” 싶은 신선함 🪐",
+        "아무 생각 없이 웃을 수 있는 포인트 😂"
+    ],
+    key="q2"
+)
+
+# 질문 3
+q3 = st.radio(
+    "Q3. 과제 폭탄 맞은 시험 기간 밤, 너의 기분은?",
+    [
+        "괜히 센치해져서 플레이리스트부터 튼다 🎧",
+        "끝까지 버티겠다는 의지로 에너지 충전 💪",
+        "현실 도피하고 싶어서 다른 세계를 상상한다 🌌",
+        "“아 망했다” 하면서도 밈 찾아본다 🤪"
+    ],
+    key="q3"
+)
+
+# 질문 4
+q4 = st.radio(
+    "Q4. 네가 영화 속 주인공이라면?",
+    [
+        "관계와 감정 속에서 성장하는 인물",
+        "위기의 순간마다 몸부터 움직이는 히어로",
+        "특별한 능력이나 운명을 가진 존재",
+        "사건을 더 꼬이게 만드는 분위기 메이커"
+    ],
+    key="q4"
+)
+
+# 질문 5
+q5 = st.radio(
+    "Q5. 영화 엔딩은 이랬으면 좋겠어",
+    [
+        "조용하지만 마음에 오래 남는 결말 🌙",
+        "모든 갈등이 해결되고 짜릿한 마무리 💥",
+        "“그래서 그 세계는 계속될까?” 여운 남김 🧩",
+        "크레딧 올라가도 웃음이 멈추지 않음 😆"
+    ],
+    key="q5"
+)
+
+st.divider()
+
+# 결과 버튼
+if st.button("🎥 결과 보기"):
+    st.subheader("분석 중...")
+    st.write("당신의 선택을 바탕으로 결과를 분석하고 있어요 👀")
