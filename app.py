@@ -1,36 +1,45 @@
 import streamlit as st
 import requests
+from openai import OpenAI
 
-# ---------------------------
+# ===========================
 # 페이지 설정
-# ---------------------------
+# ===========================
 st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬")
 
-# ---------------------------
-# 사이드바: TMDB API Key
-# ---------------------------
-st.sidebar.title("🔑 TMDB 설정")
-api_key = st.sidebar.text_input("TMDB API Key", type="password")
+# ===========================
+# 사이드바: API Keys
+# ===========================
+st.sidebar.title("🔑 API 설정")
+tmdb_api_key = st.sidebar.text_input("TMDB API Key", type="password")
+openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
-# ---------------------------
-# 세션 상태 초기화
-# ---------------------------
+# OpenAI 클라이언트
+client = None
+if openai_api_key:
+    client = OpenAI(api_key=openai_api_key)
+
+# ===========================
+# 세션 상태
+# ===========================
 if "answers" not in st.session_state:
     st.session_state.answers = {}
 
 if "show_result" not in st.session_state:
     st.session_state.show_result = False
 
-# ---------------------------
+# ===========================
 # 제목
-# ---------------------------
+# ===========================
 st.title("🎬 나와 어울리는 영화는?")
-st.write("당신의 선택을 바탕으로 지금 딱 맞는 영화를 추천해드려요 😊")
+st.write("심리테스트 + 영화 데이터 + AI 추천으로")
+st.write("**당신이 진짜 좋아할 단 하나의 영화**를 찾아드려요 😊")
+
 st.divider()
 
-# ---------------------------
+# ===========================
 # 질문 & 장르
-# ---------------------------
+# ===========================
 genres = ["로맨스/드라마", "액션/어드벤처", "SF/판타지", "코미디"]
 
 questions = {
@@ -66,36 +75,40 @@ questions = {
     ])
 }
 
-# ---------------------------
-# 질문 표시
-# ---------------------------
+# ===========================
+# 질문 UI
+# ===========================
 for q, (text, opts) in questions.items():
     st.session_state.answers[q] = st.radio(f"{q}. {text}", opts, key=q)
 
 st.divider()
 
-# ---------------------------
+# ===========================
 # 버튼
-# ---------------------------
+# ===========================
 col1, col2 = st.columns(2)
 with col1:
     if st.button("🎥 결과 보기"):
         st.session_state.show_result = True
+
 with col2:
     if st.button("🔄 다시 테스트하기"):
         st.session_state.answers = {}
         st.session_state.show_result = False
         st.experimental_rerun()
 
-# ---------------------------
+# ===========================
 # 결과 처리
-# ---------------------------
+# ===========================
 if st.session_state.show_result:
 
-    if not api_key:
-        st.warning("TMDB API Key를 입력해주세요.")
+    if not tmdb_api_key or not openai_api_key:
+        st.warning("TMDB API Key와 OpenAI API Key를 모두 입력해주세요.")
         st.stop()
 
+    # ---------------------------
+    # 장르 점수 계산
+    # ---------------------------
     scores = {g: 0 for g in genres}
     for q, ans in st.session_state.answers.items():
         idx = questions[q][1].index(ans)
@@ -103,9 +116,12 @@ if st.session_state.show_result:
 
     result_genre = max(scores, key=scores.get)
 
-    st.subheader("🎯 당신의 영화 취향")
+    st.subheader("🎯 심리테스트 결과")
     st.markdown(f"## **{result_genre}**")
 
+    # ---------------------------
+    # TMDB 장르 ID
+    # ---------------------------
     tmdb_genre_map = {
         "로맨스/드라마": "18,10749",
         "액션/어드벤처": "28",
@@ -114,11 +130,11 @@ if st.session_state.show_result:
     }
 
     # ---------------------------
-    # 영화 검색
+    # 영화 5개 가져오기
     # ---------------------------
     discover_url = (
         f"https://api.themoviedb.org/3/discover/movie"
-        f"?api_key={api_key}"
+        f"?api_key={tmdb_api_key}"
         f"&with_genres={tmdb_genre_map[result_genre]}"
         "&language=ko-KR"
         "&sort_by=popularity.desc"
@@ -126,43 +142,46 @@ if st.session_state.show_result:
 
     movies = requests.get(discover_url).json().get("results", [])[:5]
 
+    # ---------------------------
+    # LLM에게 줄 요약 정보 생성
+    # ---------------------------
+    movie_summaries = []
+    for m in movies:
+        movie_summaries.append(
+            f"- 제목: {m['title']}\n"
+            f"  평점: {m['vote_average']}\n"
+            f"  줄거리: {m.get('overview', '')[:150]}"
+        )
+
+    prompt = f"""
+사용자는 대학생이고, 심리테스트 결과 영화 취향은 '{result_genre}'입니다.
+
+아래 영화 후보 중에서
+이 사용자가 **가장 좋아할 가능성이 높은 단 하나의 영화**를 골라주세요.
+
+조건:
+- 하나만 선택
+- 왜 이 영화를 추천하는지 이유를 2~3문장으로 설명
+- 너무 딱딱하지 않고 친구에게 추천하듯 말해줘
+
+영화 목록:
+{chr(10).join(movie_summaries)}
+"""
+
+    # ---------------------------
+    # OpenAI API 호출
+    # ---------------------------
+    with st.spinner("🤖 AI가 당신에게 딱 맞는 영화를 고르고 있어요..."):
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": "너는 영화 추천을 잘하는 친절한 AI야."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+    ai_recommendation = response.choices[0].message.content
+
     st.divider()
-    st.subheader("🍿 추천 영화 TOP 5")
-
-    for movie in movies:
-        movie_id = movie["id"]
-
-        # 상세 정보
-        detail = requests.get(
-            f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&language=ko-KR"
-        ).json()
-
-        credits = requests.get(
-            f"https://api.themoviedb.org/3/movie/{movie_id}/credits?api_key={api_key}&language=ko-KR"
-        ).json()
-
-        providers = requests.get(
-            f"https://api.themoviedb.org/3/movie/{movie_id}/watch/providers?api_key={api_key}"
-        ).json()
-
-        # 데이터 정리
-        countries = ", ".join([c["name"] for c in detail.get("production_countries", [])])
-        cast = ", ".join([c["name"] for c in credits.get("cast", [])[:3]])
-        ott = ", ".join([p["provider_name"] for p in providers.get("results", {}).get("KR", {}).get("flatrate", [])])
-
-        col1, col2 = st.columns([1, 3])
-
-        with col1:
-            if movie.get("poster_path"):
-                st.image("https://image.tmdb.org/t/p/w500" + movie["poster_path"], use_container_width=True)
-
-        with col2:
-            st.markdown(f"### 🎬 {movie['title']}")
-            st.write(f"⭐ 평점: {movie['vote_average']}")
-            st.write(f"🌍 국가: {countries or '정보 없음'}")
-            st.write(f"🎭 주연: {cast or '정보 없음'}")
-            st.write(f"📺 OTT: {ott or '국내 제공 OTT 없음'}")
-            st.write(movie.get("overview", "줄거리 정보가 없습니다."))
-            st.caption("👉 당신의 취향과 가장 잘 맞는 장르의 인기 작품이에요.")
-
-        st.divider()
+    st.subheader("🤖 AI의 최종 추천")
+    st.write(ai_recommendation)
