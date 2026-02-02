@@ -1,37 +1,23 @@
 import streamlit as st
-from openai import OpenAI
+import requests
 
-st.title("🤖 나의 AI 챗봇")
+st.title("🎬 TMDB API 테스트")
 
-# 사이드바에서 API Key 입력
-api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+# 사이드바에서 API 키 입력
+TMDB_API_KEY = st.sidebar.text_input("TMDB API Key", type="password")
 
-# 대화 기록 초기화
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# 이전 대화 표시
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# 사용자 입력 처리
-if prompt := st.chat_input("메시지를 입력하세요"):
-    if not api_key:
-        st.error("⚠️ 사이드바에서 API Key를 입력해주세요!")
-    else:
-        # 사용자 메시지 저장 및 표시
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+if TMDB_API_KEY:
+    if st.button("인기 영화 가져오기"):
+        # TMDB에서 인기 영화 가져오기
+        url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=ko-KR"
+        response = requests.get(url)
+        data = response.json()
         
-        # AI 응답 생성
-        with st.chat_message("assistant"):
-            client = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=st.session_state.messages
-            )
-            reply = response.choices[0].message.content
-            st.markdown(reply)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
+        # 첫 번째 영화 정보 출력
+        movie = data['results'][0]
+        st.write(f"🎬 제목: {movie['title']}")
+        st.write(f"⭐ 평점: {movie['vote_average']}/10")
+        st.write(f"📅 개봉일: {movie['release_date']}")
+        st.write(f"📝 줄거리: {movie['overview'][:100]}...")
+else:
+    st.info("사이드바에 TMDB API Key를 입력해주세요.")
