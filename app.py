@@ -1,77 +1,190 @@
 import streamlit as st
+import requests
 
+# ---------------------------
 # 페이지 설정
-st.set_page_config(page_title="나와 어울리는 영화는?", page_icon="🎬")
+# ---------------------------
+st.set_page_config(page_title="🎬 나와 어울리는 영화는?", page_icon="🎬")
 
-# 제목
+# ---------------------------
+# 사이드바: TMDB API Key 입력
+# ---------------------------
+st.sidebar.title("🔑 TMDB 설정")
+api_key = st.sidebar.text_input("TMDB API Key", type="password")
+
+# ---------------------------
+# 세션 상태 초기화
+# ---------------------------
+if "answers" not in st.session_state:
+    st.session_state.answers = {}
+
+if "show_result" not in st.session_state:
+    st.session_state.show_result = False
+
+# ---------------------------
+# 제목 & 소개
+# ---------------------------
 st.title("🎬 나와 어울리는 영화는?")
-st.write("간단한 질문을 통해 당신과 어울리는 영화 스타일을 알아보세요!")
+st.write("간단한 질문을 통해 당신의 영화 취향을 분석하고")
+st.write("지금 딱 어울리는 영화를 추천해드려요 😊")
 
 st.divider()
 
-# 질문 1
-q1 = st.radio(
-    "Q1. 주말에 갑자기 하루가 비었다! 너의 선택은?",
-    [
-        "카페에 앉아 음악 들으면서 일기 쓰거나 영화 한 편 몰아보기 ☕",
-        "즉흥으로 여행 가거나 새로운 액티비티 도전 🚗",
-        "집에서 세계관 탄탄한 영화 정주행, 상상력 풀가동 ✨",
-        "친구들이랑 만나서 웃다가 하루 순삭 🤣"
-    ],
-    key="q1"
-)
+# ---------------------------
+# 질문 & 장르 매핑
+# ---------------------------
+genres = ["로맨스/드라마", "액션/어드벤처", "SF/판타지", "코미디"]
 
-# 질문 2
-q2 = st.radio(
-    "Q2. 영화 볼 때 가장 중요한 건 뭐야?",
-    [
-        "감정선과 여운, 보고 나서 한참 생각나면 최고 💭",
-        "속도감 있는 전개와 손에 땀 나는 장면 🔥",
-        "“이런 설정을 생각했다고?” 싶은 신선함 🪐",
-        "아무 생각 없이 웃을 수 있는 포인트 😂"
-    ],
-    key="q2"
-)
+questions = {
+    "Q1": (
+        "주말에 갑자기 하루가 비었다! 너의 선택은?",
+        [
+            "카페에 앉아 음악 들으면서 일기 쓰거나 영화 한 편 몰아보기 ☕",
+            "즉흥으로 여행 가거나 새로운 액티비티 도전 🚗",
+            "집에서 세계관 탄탄한 영화 정주행, 상상력 풀가동 ✨",
+            "친구들이랑 만나서 웃다가 하루 순삭 🤣"
+        ]
+    ),
+    "Q2": (
+        "영화 볼 때 가장 중요한 건 뭐야?",
+        [
+            "감정선과 여운, 보고 나서 한참 생각나면 최고 💭",
+            "속도감 있는 전개와 손에 땀 나는 장면 🔥",
+            "“이런 설정을 생각했다고?” 싶은 신선함 🪐",
+            "아무 생각 없이 웃을 수 있는 포인트 😂"
+        ]
+    ),
+    "Q3": (
+        "과제 폭탄 맞은 시험 기간 밤, 너의 기분은?",
+        [
+            "괜히 센치해져서 플레이리스트부터 튼다 🎧",
+            "끝까지 버티겠다는 의지로 에너지 충전 💪",
+            "현실 도피하고 싶어서 다른 세계를 상상한다 🌌",
+            "“아 망했다” 하면서도 밈 찾아본다 🤪"
+        ]
+    ),
+    "Q4": (
+        "네가 영화 속 주인공이라면?",
+        [
+            "관계와 감정 속에서 성장하는 인물",
+            "위기의 순간마다 몸부터 움직이는 히어로",
+            "특별한 능력이나 운명을 가진 존재",
+            "사건을 더 꼬이게 만드는 분위기 메이커"
+        ]
+    ),
+    "Q5": (
+        "영화 엔딩은 이랬으면 좋겠어",
+        [
+            "조용하지만 마음에 오래 남는 결말 🌙",
+            "모든 갈등이 해결되고 짜릿한 마무리 💥",
+            "“그래서 그 세계는 계속될까?” 여운 남김 🧩",
+            "크레딧 올라가도 웃음이 멈추지 않음 😆"
+        ]
+    )
+}
 
-# 질문 3
-q3 = st.radio(
-    "Q3. 과제 폭탄 맞은 시험 기간 밤, 너의 기분은?",
-    [
-        "괜히 센치해져서 플레이리스트부터 튼다 🎧",
-        "끝까지 버티겠다는 의지로 에너지 충전 💪",
-        "현실 도피하고 싶어서 다른 세계를 상상한다 🌌",
-        "“아 망했다” 하면서도 밈 찾아본다 🤪"
-    ],
-    key="q3"
-)
-
-# 질문 4
-q4 = st.radio(
-    "Q4. 네가 영화 속 주인공이라면?",
-    [
-        "관계와 감정 속에서 성장하는 인물",
-        "위기의 순간마다 몸부터 움직이는 히어로",
-        "특별한 능력이나 운명을 가진 존재",
-        "사건을 더 꼬이게 만드는 분위기 메이커"
-    ],
-    key="q4"
-)
-
-# 질문 5
-q5 = st.radio(
-    "Q5. 영화 엔딩은 이랬으면 좋겠어",
-    [
-        "조용하지만 마음에 오래 남는 결말 🌙",
-        "모든 갈등이 해결되고 짜릿한 마무리 💥",
-        "“그래서 그 세계는 계속될까?” 여운 남김 🧩",
-        "크레딧 올라가도 웃음이 멈추지 않음 😆"
-    ],
-    key="q5"
-)
+# ---------------------------
+# 질문 표시
+# ---------------------------
+for q_key, (q_text, q_options) in questions.items():
+    st.session_state.answers[q_key] = st.radio(
+        f"{q_key}. {q_text}",
+        q_options,
+        key=q_key
+    )
 
 st.divider()
 
-# 결과 버튼
-if st.button("🎥 결과 보기"):
-    st.subheader("분석 중...")
-    st.write("당신의 선택을 바탕으로 결과를 분석하고 있어요 👀")
+# ---------------------------
+# 버튼
+# ---------------------------
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🎥 결과 보기"):
+        st.session_state.show_result = True
+
+with col2:
+    if st.button("🔄 다시 테스트하기"):
+        st.session_state.answers = {}
+        st.session_state.show_result = False
+        st.experimental_rerun()
+
+# ---------------------------
+# 결과 처리
+# ---------------------------
+if st.session_state.show_result:
+
+    if not api_key:
+        st.warning("⚠️ TMDB API Key를 사이드바에 입력해주세요.")
+        st.stop()
+
+    # 점수 계산
+    scores = {g: 0 for g in genres}
+
+    for q_key, answer in st.session_state.answers.items():
+        idx = questions[q_key][1].index(answer)
+        scores[genres[idx]] += 1
+
+    result_genre = max(scores, key=scores.get)
+
+    st.subheader("🎯 당신의 영화 취향 결과")
+    st.markdown(f"## **{result_genre}**")
+
+    # ---------------------------
+    # TMDB 장르 ID 매핑
+    # ---------------------------
+    tmdb_genre_map = {
+        "로맨스/드라마": "18,10749",
+        "액션/어드벤처": "28",
+        "SF/판타지": "878,14",
+        "코미디": "35"
+    }
+
+    genre_reason = {
+        "로맨스/드라마": "감정선과 인간관계를 중시하는 선택이 많았어요.",
+        "액션/어드벤처": "도전적이고 에너지 넘치는 성향이 잘 드러났어요.",
+        "SF/판타지": "상상력과 새로운 세계에 대한 호기심이 강해요.",
+        "코미디": "웃음과 분위기를 중요하게 생각하는 타입이에요."
+    }
+
+    st.write(f"💡 **이 장르를 추천하는 이유**: {genre_reason[result_genre]}")
+
+    # ---------------------------
+    # TMDB API 호출
+    # ---------------------------
+    url = (
+        "https://api.themoviedb.org/3/discover/movie"
+        f"?api_key={api_key}"
+        f"&with_genres={tmdb_genre_map[result_genre]}"
+        "&language=ko-KR"
+        "&sort_by=popularity.desc"
+    )
+
+    response = requests.get(url)
+    data = response.json()
+    movies = data.get("results", [])[:5]
+
+    st.divider()
+    st.subheader("🍿 추천 영화 TOP 5")
+
+    # ---------------------------
+    # 영화 출력
+    # ---------------------------
+    for movie in movies:
+        col1, col2 = st.columns([1, 3])
+
+        with col1:
+            if movie.get("poster_path"):
+                poster_url = "https://image.tmdb.org/t/p/w500" + movie["poster_path"]
+                st.image(poster_url, use_container_width=True)
+            else:
+                st.write("포스터 없음")
+
+        with col2:
+            st.markdown(f"### 🎬 {movie.get('title')}")
+            st.write(f"⭐ 평점: {movie.get('vote_average')}")
+            st.write(movie.get("overview", "줄거리 정보가 없습니다."))
+            st.caption("👉 이 영화는 당신의 취향 장르에서 특히 인기가 많아요.")
+
+        st.divider()
