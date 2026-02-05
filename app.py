@@ -1,30 +1,47 @@
-# app.py
-# My Curator – Full Version (Python 3.13 compatible)
-
-import time
-import hashlib
+import json
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Dict, Optional
 
-import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-from difflib import get_close_matches
+import requests
 
 # ======================================================
-# System Prompt
+# System Prompt (UI 미노출)
 # ======================================================
-SYSTEM_PROMPT = (
-    "당신은 음악, 도서, 미술, 영화를 포함해 문화 전반에 식견이 넓고 깊은 "
-    "큐레이터이자 평론가입니다. 문화적인 식견을 바탕으로 사용자가 만족할만한 "
-    "작품을 추천하고 어떤 관점으로 감상하면 좋을지 자세히 설명해주세요."
-)
+SYSTEM_PROMPT = """
+당신은 음악, 도서, 영화, 미술 전반에 깊은 식견을 가진 큐레이터이자 평론가입니다.
+사용자의 취향 또는 기준 작품을 바탕으로 실제 존재하는 작품을 추천해야 합니다.
+
+각 작품에 대해 반드시 다음 두 가지를 모두 포함해 설명하세요.
+1. 추천 이유
+2. 감상 포인트 (어떤 관점으로 보면 좋은지, 무엇에 주목하면 좋은지)
+
+존재하지 않는 작품을 만들어내면 안 됩니다.
+"""
 
 # ======================================================
-# Taste Dimensions
+# Constants
 # ======================================================
 DIMENSIONS = ["복잡성", "직관성", "대중성", "감정 톤", "개방성", "각성도"]
+
+DIM_LABELS = {
+    "복잡성": ("simple", "complex"),
+    "직관성": ("analytical", "intuitive"),
+    "대중성": ("niche", "mainstream"),
+    "감정 톤": ("dark", "bright"),
+    "개방성": ("conventional", "exploratory"),
+    "각성도": ("calm", "intense"),
+}
+
 CATEGORIES = ["도서", "음악", "영화", "미술"]
+
+CATEGORY_EMOJI = {
+    "도서": "📚",
+    "음악": "🎵",
+    "영화": "🎬",
+    "미술": "🖼️",
+}
 
 # ======================================================
 # Data Model
@@ -34,145 +51,20 @@ class Item:
     category: str
     title: str
     creator: str
-    year: str
-    vector: np.ndarray
-    tagline: str
-
+    reason: str
+    image: Optional[str] = None
 
 # ======================================================
-# Utility Functions
+# Utils
 # ======================================================
-def clamp(value: float) -> float:
-    return max(0.0, min(10.0, float(value)))
-
-
-def normalize(vec: np.ndarray) -> np.ndarray:
-    norm = np.linalg.norm(vec)
-    if norm == 0:
-        return vec
-    return vec / norm
-
-
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(normalize(a), normalize(b)))
-
-
-def placeholder_image(text: str) -> str:
-    safe = "".join(c for c in text if c.isalnum() or c in " _-")[:22]
-    return f"https://placehold.co/600x800?text={safe.replace(' ', '+')}"
-
-
-def stable_vector(seed: str) -> np.ndarray:
-    h = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    values = []
-    for i in range(6):
-        chunk = h[i * 8:(i + 1) * 8]
-        values.append((int(chunk, 16) % 1000) / 100)
-    return np.array(values, dtype=float)
-
-
-# ======================================================
-# Catalog (Example Data)
-# ======================================================
-CATALOG: List[Item] = [
-    # Books
-    Item("도서", "데미안", "헤르만 헤세", "1919",
-         np.array([6, 8, 8, 7, 7, 4]), "자기 탐색의 서사"),
-    Item("도서", "백년 동안의 고독", "가브리엘 가르시아 마르케스", "1967",
-         np.array([9, 4, 6, 8, 8, 5]), "시간과 신화의 소용돌이"),
-
-    # Music
-    Item("음악", "OK Computer", "Radiohead", "1997",
-         np.array([8, 6, 7, 7, 8, 7]), "기술 시대의 불안"),
-    Item("음악", "Kind of Blue", "Miles Davis", "1959",
-         np.array([6, 9, 9, 7, 7, 4]), "여백과 즉흥"),
-
-    # Movies
-    Item("영화", "이터널 선샤인", "미셸 공드리", "2004",
-         np.array([6, 8, 8, 9, 7, 6]), "기억과 사랑"),
-    Item("영화", "기생충", "봉준호", "2019",
-         np.array([7, 9, 9, 7, 7, 8]), "장르의 전복"),
-
-    # Art
-    Item("미술", "별이 빛나는 밤", "Vincent van Gogh", "1889",
-         np.array([6, 9, 9, 9, 7, 7]), "감정의 소용돌이"),
-    Item("미술", "게르니카", "Pablo Picasso", "1937",
-         np.array([8, 6, 8, 8, 8, 8]), "폭력의 파편"),
-]
-
-# ======================================================
-# Recommendation Logic
-# ======================================================
-def recommend_by_vector(target: np.ndarray, exclude: Optional[Item] = None) -> Dict[str, Item]:
-    results: Dict[str, Item] = {}
-    for category in CATEGORIES:
-        items = [i for i in CATALOG if i.category == category]
-        if exclude:
-            items = [
-                i for i in items
-                if not (i.category == exclude.category and i.title == exclude.title)
-            ]
-        best = max(items, key=lambda i: cosine_similarity(target, i.vector))
-        results[category] = best
-    return results
-
-
-def find_anchor(category: str, creator: str, title: str) -> Optional[Item]:
-    candidates = [i for i in CATALOG if i.category == category]
-    query = f"{creator} {title}".strip().lower()
-
-    for item in candidates:
-        if query and query in f"{item.creator} {item.title}".lower():
-            return item
-
-    matches = get_close_matches(
-        title, [i.title for i in candidates], n=1, cutoff=0.6
-    )
-    if matches:
-        for item in candidates:
-            if item.title == matches[0]:
-                return item
-    return None
-
-
-def curator_reason(item: Item, user_vec: np.ndarray, anchor: Optional[Item] = None) -> str:
-    diffs = np.abs(user_vec - item.vector)
-    best_axis = DIMENSIONS[int(np.argmin(diffs))]
-
-    text = [
-        f"**{item.tagline}**",
-        f"이 작품은 특히 **{best_axis}** 축에서 당신의 성향과 잘 맞습니다."
-    ]
-
-    if anchor:
-        sim = cosine_similarity(anchor.vector, item.vector)
-        text.append(
-            f"입력한 작품 **{anchor.title}**와도 정서적 결이 이어지며 "
-            f"(유사도 {sim:.2f}), 함께 감상하면 맥락이 확장됩니다."
-        )
-
-    text.append(
-        "감상 시에는 작품의 분위기뿐 아니라 구조와 리듬이 "
-        "어떤 감정을 유도하는지에 주목해 보세요."
-    )
-
-    return "\n\n".join(text)
-
-
-# ======================================================
-# Radar Chart
-# ======================================================
-def radar_chart(values: List[float], scale: float = 1.0) -> go.Figure:
-    values = [clamp(v * scale) for v in values]
+def radar_chart(values: List[float]) -> go.Figure:
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatterpolar(
-            r=values + [values[0]],
-            theta=DIMENSIONS + [DIMENSIONS[0]],
-            fill="toself",
-            line=dict(width=4),
-        )
-    )
+    fig.add_trace(go.Scatterpolar(
+        r=values + [values[0]],
+        theta=DIMENSIONS + [DIMENSIONS[0]],
+        fill="toself",
+        line=dict(width=4),
+    ))
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 10])),
         showlegend=False,
@@ -181,112 +73,238 @@ def radar_chart(values: List[float], scale: float = 1.0) -> go.Figure:
     return fig
 
 
-def animate_radar(values: List[float]):
-    slot = st.empty()
-    for scale in [1.0, 1.05, 1.1, 1.15]:
-        slot.plotly_chart(radar_chart(values, scale), use_container_width=True)
-        time.sleep(0.08)
+def placeholder_image(text: str) -> str:
+    safe = "".join(c for c in text if c.isalnum() or c in " _-")[:20]
+    return f"https://placehold.co/600x800?text={safe.replace(' ', '+')}"
 
+# ======================================================
+# External APIs (이미지용)
+# ======================================================
+def fetch_tmdb(title: str, key: str) -> Optional[str]:
+    if not key:
+        return None
+    r = requests.get(
+        "https://api.themoviedb.org/3/search/movie",
+        params={"api_key": key, "query": title, "language": "ko-KR"},
+        timeout=5,
+    ).json()
+    if r.get("results"):
+        p = r["results"][0].get("poster_path")
+        if p:
+            return f"https://image.tmdb.org/t/p/w500{p}"
+    return None
+
+
+def fetch_lastfm(artist: str, album: str, key: str) -> Optional[str]:
+    if not key:
+        return None
+    r = requests.get(
+        "http://ws.audioscrobbler.com/2.0/",
+        params={
+            "method": "album.getinfo",
+            "api_key": key,
+            "artist": artist,
+            "album": album,
+            "format": "json",
+        },
+        timeout=5,
+    ).json()
+    try:
+        return r["album"]["image"][-1]["#text"]
+    except Exception:
+        return None
+
+
+def fetch_kakao_book(title: str, key: str) -> Optional[str]:
+    if not key:
+        return None
+    r = requests.get(
+        "https://dapi.kakao.com/v3/search/book",
+        headers={"Authorization": f"KakaoAK {key}"},
+        params={"query": title},
+        timeout=5,
+    ).json()
+    if r.get("documents"):
+        return r["documents"][0].get("thumbnail")
+    return None
+
+
+def fetch_met_artwork(title: str) -> Optional[str]:
+    search = requests.get(
+        "https://collectionapi.metmuseum.org/public/collection/v1/search",
+        params={"q": title},
+        timeout=5,
+    ).json()
+    if not search.get("objectIDs"):
+        return None
+    obj_id = search["objectIDs"][0]
+    obj = requests.get(
+        f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}",
+        timeout=5,
+    ).json()
+    return obj.get("primaryImageSmall")
+
+# ======================================================
+# OpenAI Recommendation (핵심)
+# ======================================================
+def recommend_with_llm(prompt: str, openai_key: str) -> Dict[str, Dict]:
+    if not openai_key:
+        raise RuntimeError("OpenAI API Key가 필요합니다.")
+
+    from openai import OpenAI
+    client = OpenAI(api_key=openai_key)
+
+    res = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.7,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+    return json.loads(res.choices[0].message.content)
 
 # ======================================================
 # Streamlit App
 # ======================================================
 st.set_page_config(page_title="My Curator", page_icon="✨", layout="wide")
-
-if "page" not in st.session_state:
-    st.session_state.page = "main"
-if "mode" not in st.session_state:
-    st.session_state.mode = None
-if "taste" not in st.session_state:
-    st.session_state.taste = [6.0] * 6
-
 st.title("✨ My Curator")
-st.caption("취향의 별을 조율하거나, 한 작품에서 다른 세계로 확장하세요.")
 
-# ---------------- MAIN ----------------
-if st.session_state.page == "main":
-    col1, col2 = st.columns([1.2, 1])
+# ---------------- Sidebar ----------------
+st.sidebar.header("🔑 API Keys")
+openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
+tmdb_key = st.sidebar.text_input("TMDb API Key", type="password")
+lastfm_key = st.sidebar.text_input("Last.fm API Key", type="password")
+kakao_key = st.sidebar.text_input("Kakao Book API Key", type="password")
 
-    with col1:
-        st.subheader("검색 방식 선택")
+mode = st.radio("검색 방식 선택", ["취향 검색", "연관 검색"], horizontal=True)
 
-        if st.button("🎛️ 취향 검색", use_container_width=True):
-            st.session_state.mode = "taste"
+# ======================================================
+# 취향 검색
+# ======================================================
+if mode == "취향 검색":
+    values = []
 
-        if st.button("🔗 연관 검색", use_container_width=True):
-            st.session_state.mode = "related"
+    for dim in DIMENSIONS:
+        left, right = DIM_LABELS[dim]
+        st.markdown(f"**{dim}**")
+
+        cols = st.columns([1, 6, 1])
+        with cols[0]:
+            st.markdown(f"<div style='font-size:0.85em; opacity:0.8'>{left}</div>", unsafe_allow_html=True)
+        with cols[1]:
+            v = st.slider(dim, 0.0, 10.0, 6.0, 0.5, label_visibility="collapsed")
+            values.append(v)
+        with cols[2]:
+            st.markdown(f"<div style='font-size:0.85em; opacity:0.8; text-align:right'>{right}</div>", unsafe_allow_html=True)
+
+    st.plotly_chart(radar_chart(values), use_container_width=True)
+
+    if st.button("✨ curate", type="primary"):
+        taste_desc = "\n".join(f"- {DIMENSIONS[i]}: {values[i]}" for i in range(6))
+
+        prompt = f"""
+다음은 사용자의 취향입니다:
+{taste_desc}
+
+이 취향에 가장 잘 맞는 작품을 아래 형식의 JSON으로 추천하세요.
+
+형식:
+{{
+  "도서": {{"title": "", "creator": "", "reason": ""}},
+  "음악": {{"title": "", "creator": "", "reason": ""}},
+  "영화": {{"title": "", "creator": "", "reason": ""}},
+  "미술": {{"title": "", "creator": "", "reason": ""}}
+}}
+"""
+
+        recs = recommend_with_llm(prompt, openai_key)
+
+        items: List[Item] = []
+        for cat in CATEGORIES:
+            r = recs[cat]
+            item = Item(cat, r["title"], r["creator"], r["reason"])
+
+            if cat == "도서":
+                item.image = fetch_kakao_book(item.title, kakao_key)
+            elif cat == "음악":
+                item.image = fetch_lastfm(item.creator, item.title, lastfm_key)
+            elif cat == "영화":
+                item.image = fetch_tmdb(item.title, tmdb_key)
+            else:
+                item.image = fetch_met_artwork(item.title)
+
+            item.image = item.image or placeholder_image(item.title)
+            items.append(item)
 
         st.divider()
+        cols = st.columns(4)
+        for i, item in enumerate(items):
+            with cols[i]:
+                st.markdown(f"### {CATEGORY_EMOJI[item.category]} {item.category}")
+                st.image(item.image, use_container_width=True)
+                st.markdown(f"**{item.title}**")
+                st.caption(item.creator)
+                st.markdown(item.reason)
 
-        # Taste Search
-        if st.session_state.mode == "taste":
-            st.subheader("취향 설정")
+# ======================================================
+# 연관 검색
+# ======================================================
+if mode == "연관 검색":
+    base_cat = st.selectbox("기준 카테고리", CATEGORIES)
+    base_creator = st.text_input("창작자")
+    base_title = st.text_input("작품 제목")
 
-            values: List[float] = []
-            for i, dim in enumerate(DIMENSIONS):
-                values.append(
-                    st.slider(dim, 0.0, 10.0, st.session_state.taste[i], 0.5)
-                )
+    if st.button("✨ curate", type="primary"):
+        prompt = f"""
+다음 작품과 함께 감상하면 좋은 작품을 추천하세요.
 
-            st.session_state.taste = values
-            st.plotly_chart(radar_chart(values), use_container_width=True)
+기준 작품:
+- 카테고리: {base_cat}
+- 제목: {base_title}
+- 창작자: {base_creator}
 
-            if st.button("✨ curate", type="primary"):
-                animate_radar(values)
-                user_vec = np.array(values)
-                st.session_state.results = recommend_by_vector(user_vec)
-                st.session_state.reasons = {
-                    k: curator_reason(v, user_vec) for k, v in st.session_state.results.items()
-                }
-                st.session_state.page = "results"
-                st.rerun()
+아래 형식의 JSON으로 추천하세요.
+(기준 작품과 같은 카테고리는 제외)
 
-        # Related Search
-        if st.session_state.mode == "related":
-            category = st.selectbox("카테고리", CATEGORIES)
-            creator = st.text_input("창작자")
-            title = st.text_input("작품 제목")
+형식:
+{{
+  "도서": {{"title": "", "creator": "", "reason": ""}},
+  "음악": {{"title": "", "creator": "", "reason": ""}},
+  "영화": {{"title": "", "creator": "", "reason": ""}},
+  "미술": {{"title": "", "creator": "", "reason": ""}}
+}}
+"""
 
-            if st.button("✨ curate", type="primary"):
-                anchor = find_anchor(category, creator, title)
-                if anchor:
-                    vec = anchor.vector
-                else:
-                    vec = stable_vector(f"{category}-{creator}-{title}")
-                    anchor = Item(category, title, creator, "—", vec, "입력 기반 연관점")
+        recs = recommend_with_llm(prompt, openai_key)
 
-                st.session_state.results = recommend_by_vector(vec, exclude=anchor)
-                st.session_state.reasons = {
-                    k: curator_reason(v, vec, anchor) for k, v in st.session_state.results.items()
-                }
-                st.session_state.anchor = anchor
-                st.session_state.page = "results"
-                st.rerun()
+        items: List[Item] = []
+        for cat in CATEGORIES:
+            if cat == base_cat:
+                continue
 
-    with col2:
-        st.subheader("System Prompt")
-        st.text_area("큐레이터 성격", SYSTEM_PROMPT, height=200)
+            r = recs[cat]
+            item = Item(cat, r["title"], r["creator"], r["reason"])
 
-# ---------------- RESULTS ----------------
-if st.session_state.page == "results":
-    st.subheader("추천 결과")
+            if cat == "도서":
+                item.image = fetch_kakao_book(item.title, kakao_key)
+            elif cat == "음악":
+                item.image = fetch_lastfm(item.creator, item.title, lastfm_key)
+            elif cat == "영화":
+                item.image = fetch_tmdb(item.title, tmdb_key)
+            else:
+                item.image = fetch_met_artwork(item.title)
 
-    cols = st.columns(4)
-    for i, cat in enumerate(CATEGORIES):
-        item = st.session_state.results[cat]
-        with cols[i]:
-            st.image(placeholder_image(item.title), use_container_width=True)
-            st.markdown(f"**{item.title}**")
-            st.caption(f"{item.creator} · {item.year}")
+            item.image = item.image or placeholder_image(item.title)
+            items.append(item)
 
-    st.divider()
-    st.subheader("큐레이터의 설명")
-
-    for cat in CATEGORIES:
-        item = st.session_state.results[cat]
-        with st.expander(f"[{cat}] {item.title}"):
-            st.markdown(st.session_state.reasons[cat])
-
-    if st.button("🔄 초기화"):
-        st.session_state.clear()
-        st.rerun()
+        st.divider()
+        cols = st.columns(3)
+        for i, item in enumerate(items):
+            with cols[i]:
+                st.markdown(f"### {CATEGORY_EMOJI[item.category]} {item.category}")
+                st.image(item.image, use_container_width=True)
+                st.markdown(f"**{item.title}**")
+                st.caption(item.creator)
+                st.markdown(item.reason)
