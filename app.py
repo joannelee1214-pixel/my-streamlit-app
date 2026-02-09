@@ -19,8 +19,6 @@ SYSTEM_PROMPT = """
 
 중요 제약:
 - 음악은 반드시 '앨범(정규/EP/컴필레이션 포함)' 단위로만 추천하세요. (곡/트랙 금지)
-- 미술은 가능한 한 '작품의 영문 제목(English title)'도 함께 떠올려 추천하고,
-  작품 제목이 현지어/번역명인 경우 괄호로 영문 제목을 덧붙이세요. 예: 절규 (The Scream)
 - 존재하지 않는 작품을 만들어내면 안 됩니다.
 - JSON 형식만 출력하세요. 추가 텍스트 금지.
 """
@@ -84,65 +82,146 @@ def placeholder_image(text: str) -> str:
     return f"https://placehold.co/600x800?text={safe.replace(' ', '+')}"
 
 
-def clean_title_for_search(title: str) -> str:
-    """
-    API 검색 성공률을 높이기 위해 괄호 안 보조정보를 제거하거나 줄이는 정도의 정리만 수행.
-    (기존 기능 변경 없이 '검색만' 개선)
-    """
-    t = title.strip()
-    # "절규 (The Scream)" -> "절규"와 "The Scream" 둘 다 시도할 거라 원문은 유지하고,
-    # 괄호 내용만 따로 뽑을 수 있게 반환은 원문 그대로 사용.
-    return t
+def safe_text(s: str) -> str:
+    return (s or "").strip()
 
-
-def extract_parenthetical_english(title: str) -> Optional[str]:
-    # "절규 (The Scream)" -> "The Scream"
-    t = title.strip()
-    if "(" in t and ")" in t:
-        inside = t.split("(", 1)[1].split(")", 1)[0].strip()
-        if inside:
-            return inside
-    return None
 
 # ======================================================
-# External APIs (이미지용)
+# Naver Search API (도서/영화/미술 이미지)
 # ======================================================
-def fetch_tmdb(title: str, key: str) -> Optional[str]:
-    if not key:
+def naver_headers(client_id: str, client_secret: str) -> Dict[str, str]:
+    return {
+        "X-Naver-Client-Id": client_id.strip(),
+        "X-Naver-Client-Secret": client_secret.strip(),
+    }
+
+
+def fetch_naver_image(
+    query: str,
+    client_id: str,
+    client_secret: str,
+    display: int = 5,
+) -> Optional[str]:
+    """
+    네이버 이미지 검색 API로 첫 번째 결과 이미지 링크를 가져옴.
+    """
+    if not client_id or not client_secret:
         return None
+
     try:
         r = requests.get(
-            "https://api.themoviedb.org/3/search/movie",
-            params={"api_key": key, "query": title, "language": "ko-KR"},
-            timeout=8,
+            "https://openapi.naver.com/v1/search/image",
+            headers=naver_headers(client_id, client_secret),
+            params={
+                "query": query,
+                "display": display,
+                "sort": "sim",  # 유사도순
+                "filter": "all",
+            },
+            timeout=10,
         ).json()
-        if r.get("results"):
-            p = r["results"][0].get("poster_path")
-            if p:
-                return f"https://image.tmdb.org/t/p/w500{p}"
+
+        items = r.get("items") or []
+        if not items:
+            return None
+
+        # 첫 번째 링크 우선
+        link = items[0].get("link")
+        return link or None
+
     except Exception:
         return None
-    return None
 
 
-def fetch_kakao_book(title: str, key: str) -> Optional[str]:
-    if not key:
+def fetch_naver_book_image(
+    title: str,
+    author: str,
+    client_id: str,
+    client_secret: str
+) -> Optional[str]:
+    """
+    책은 이미지 검색으로도 되지만,
+    책 검색 API가 더 정확하긴 해서 책 API 먼저 시도 후 없으면 이미지 검색.
+    """
+    if not client_id or not client_secret:
         return None
+
+    q = f"{title} {author}".strip()
+
+    # 1) book search
     try:
         r = requests.get(
-            "https://dapi.kakao.com/v3/search/book",
-            headers={"Authorization": f"KakaoAK {key}"},
-            params={"query": title},
-            timeout=8,
+            "https://openapi.naver.com/v1/search/book.json",
+            headers=naver_headers(client_id, client_secret),
+            params={"query": q, "display": 5, "sort": "sim"},
+            timeout=10,
         ).json()
-        if r.get("documents"):
-            return r["documents"][0].get("thumbnail")
+
+        items = r.get("items") or []
+        if items:
+            img = items[0].get("image")
+            if img:
+                return img
     except Exception:
+        pass
+
+    # 2) fallback: image search
+    return fetch_naver_image(q, client_id, client_secret)
+
+
+def fetch_naver_movie_image(
+    title: str,
+    director: str,
+    client_id: str,
+    client_secret: str
+) -> Optional[str]:
+    """
+    영화는 movie 검색 API를 먼저 시도하고,
+    실패하면 이미지 검색으로 폴백.
+    """
+    if not client_id or not client_secret:
         return None
-    return None
+
+    q = f"{title} {director}".strip()
+
+    # 1) movie search
+    try:
+        r = requests.get(
+            "https://openapi.naver.com/v1/search/movie.json",
+            headers=naver_headers(client_id, client_secret),
+            params={"query": q, "display": 5},
+            timeout=10,
+        ).json()
+
+        items = r.get("items") or []
+        if items:
+            img = items[0].get("image")
+            if img:
+                return img
+    except Exception:
+        pass
+
+    # 2) fallback: image search
+    return fetch_naver_image(q, client_id, client_secret)
 
 
-# ---------- Last.fm 개선: album.getinfo 실패 시 album.search로 폴백 ----------
+def fetch_naver_art_image(
+    title: str,
+    artist: str,
+    client_id: str,
+    client_secret: str
+) -> Optional[str]:
+    """
+    미술은 전용 API가 없으니 이미지 검색을 씀.
+    작품명+작가명으로 검색하면 성공률이 훨씬 올라감.
+    """
+    q = f"{title} {artist} artwork".strip()
+    return fetch_naver_image(q, client_id, client_secret)
+
+
+# ======================================================
+# Last.fm (음악 앨범 커버) - 폴백 강화 유지
+# ======================================================
 def _lastfm_album_getinfo(artist: str, album: str, key: str) -> Optional[str]:
     r = requests.get(
         "http://ws.audioscrobbler.com/2.0/",
@@ -163,9 +242,6 @@ def _lastfm_album_getinfo(artist: str, album: str, key: str) -> Optional[str]:
 
 
 def _lastfm_album_search(album: str, key: str, limit: int = 5) -> List[Tuple[str, str]]:
-    """
-    album.search로 후보(artist, album)를 몇 개 가져옴.
-    """
     r = requests.get(
         "http://ws.audioscrobbler.com/2.0/",
         params={
@@ -177,6 +253,7 @@ def _lastfm_album_search(album: str, key: str, limit: int = 5) -> List[Tuple[str
         },
         timeout=8,
     ).json()
+
     out: List[Tuple[str, str]] = []
     try:
         matches = r["results"]["albummatches"]["album"]
@@ -193,26 +270,19 @@ def _lastfm_album_search(album: str, key: str, limit: int = 5) -> List[Tuple[str
 
 
 def fetch_lastfm(artist: str, album: str, key: str) -> Optional[str]:
-    """
-    기존 기능 유지 + 성공률만 올림:
-    1) album.getinfo(원래 방식)
-    2) 실패하면 album.search로 가장 그럴듯한 후보를 찾고 getinfo 재시도
-    """
     if not key:
         return None
 
-    a = (artist or "").strip()
-    t = (album or "").strip()
+    a = safe_text(artist)
+    t = safe_text(album)
     if not t:
         return None
 
     try:
-        # 1) 원래 방식
         img = _lastfm_album_getinfo(a, t, key)
         if img:
             return img
 
-        # 2) 폴백: album.search로 후보를 찾아 getinfo
         candidates = _lastfm_album_search(t, key, limit=6)
         for cand_artist, cand_album in candidates:
             img2 = _lastfm_album_getinfo(cand_artist, cand_album, key)
@@ -223,66 +293,6 @@ def fetch_lastfm(artist: str, album: str, key: str) -> Optional[str]:
     except Exception:
         return None
 
-
-# ---------- The Met 개선: 결과 여러 개 순회 + (영문 괄호/작가명) 보조 검색 ----------
-def _met_search_object_ids(query: str, limit: int = 25) -> List[int]:
-    search = requests.get(
-        "https://collectionapi.metmuseum.org/public/collection/v1/search",
-        params={"q": query, "hasImages": "true"},
-        timeout=10,
-    ).json()
-    ids = search.get("objectIDs") or []
-    # 너무 많으면 앞쪽만
-    return ids[:limit]
-
-
-def _met_get_image_for_object(obj_id: int) -> Optional[str]:
-    obj = requests.get(
-        f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}",
-        timeout=10,
-    ).json()
-    # primaryImageSmall 우선, 없으면 primaryImage
-    return obj.get("primaryImageSmall") or obj.get("primaryImage") or None
-
-
-def fetch_met_artwork(title: str, artist: Optional[str] = None) -> Optional[str]:
-    """
-    기존: 첫 번째 결과만 사용 → 실패 잦음
-    개선: 여러 ID를 순회하면서 이미지 있는 걸 찾음.
-    또한, 제목에 (English) 괄호가 있으면 그 영문으로도 검색.
-    가능하면 'artist + title' 결합 검색도 시도.
-    """
-    try:
-        raw_title = clean_title_for_search(title)
-        english_in_paren = extract_parenthetical_english(raw_title)
-
-        queries = []
-        if raw_title:
-            queries.append(raw_title)
-        if english_in_paren and english_in_paren != raw_title:
-            queries.append(english_in_paren)
-
-        if artist:
-            a = artist.strip()
-            if a and raw_title:
-                queries.insert(0, f"{a} {raw_title}")
-            if a and english_in_paren:
-                queries.insert(0, f"{a} {english_in_paren}")
-
-        # 중복 제거
-        seen = set()
-        queries = [q for q in queries if q and not (q in seen or seen.add(q))]
-
-        for q in queries:
-            ids = _met_search_object_ids(q, limit=30)
-            for obj_id in ids:
-                img = _met_get_image_for_object(obj_id)
-                if img:
-                    return img
-
-        return None
-    except Exception:
-        return None
 
 # ======================================================
 # OpenAI Recommendation (핵심)
@@ -305,25 +315,25 @@ def recommend_with_llm(prompt: str, openai_key: str) -> Dict[str, Dict]:
 
     return json.loads(res.choices[0].message.content)
 
+
 # ======================================================
 # Streamlit App
 # ======================================================
 st.set_page_config(page_title="My Curator", page_icon="✨", layout="wide")
 
-# --- UI: mode 선택을 더 눈에 띄게(기능은 동일) ---
+# --- UI: mode 선택을 더 눈에 띄게(기능 동일) ---
 st.markdown(
     """
     <style>
-    /* 라디오를 버튼처럼 보이게 */
     div[data-testid="stRadio"] > div {
         background: rgba(127,127,127,0.08);
-        padding: 0.6rem 0.8rem;
+        padding: 0.7rem 0.9rem;
         border-radius: 16px;
         border: 1px solid rgba(127,127,127,0.18);
     }
     div[data-testid="stRadio"] label {
         font-size: 1.05rem !important;
-        font-weight: 700 !important;
+        font-weight: 800 !important;
     }
     </style>
     """,
@@ -334,10 +344,14 @@ st.title("✨ My Curator")
 
 # ---------------- Sidebar ----------------
 st.sidebar.header("🔑 API Keys")
+
 openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
-tmdb_key = st.sidebar.text_input("TMDb API Key", type="password")
 lastfm_key = st.sidebar.text_input("Last.fm API Key", type="password")
-kakao_key = st.sidebar.text_input("Kakao Book API Key", type="password")
+
+st.sidebar.divider()
+st.sidebar.subheader("네이버 검색 API")
+naver_client_id = st.sidebar.text_input("Naver Client ID", type="password")
+naver_client_secret = st.sidebar.text_input("Naver Client Secret", type="password")
 
 mode_choice = st.radio(
     "검색 방식 선택",
@@ -376,7 +390,6 @@ if mode == "취향 검색":
     if st.button("✨ curate", type="primary"):
         taste_desc = "\n".join(f"- {DIMENSIONS[i]}: {values[i]}" for i in range(6))
 
-        # ✅ 음악은 '앨범'만 추천하도록 명시 강화(기능 추가/삭제 없이 프롬프트만 강화)
         prompt = f"""
 다음은 사용자의 취향입니다:
 {taste_desc}
@@ -385,8 +398,8 @@ if mode == "취향 검색":
 
 엄격 규칙:
 - 음악은 반드시 앨범 단위로만 추천 (곡/트랙 금지). title에는 '앨범명'만.
-- 미술 title에는 가능하면 영문 제목을 괄호로 병기. 예: 절규 (The Scream)
 - reason에는 '추천 이유'와 '감상 포인트'를 모두 포함.
+- 너무 길지 않게: 5~8줄 정도로 간결하게.
 
 형식(키 이름/구조 그대로):
 {{
@@ -405,15 +418,19 @@ if mode == "취향 검색":
             item = Item(cat, r["title"], r["creator"], r["reason"])
 
             if cat == "도서":
-                item.image = fetch_kakao_book(item.title, kakao_key)
+                item.image = fetch_naver_book_image(
+                    item.title, item.creator, naver_client_id, naver_client_secret
+                )
             elif cat == "음악":
-                # ✅ Last.fm 폴백 강화된 fetch_lastfm 사용
                 item.image = fetch_lastfm(item.creator, item.title, lastfm_key)
             elif cat == "영화":
-                item.image = fetch_tmdb(item.title, tmdb_key)
+                item.image = fetch_naver_movie_image(
+                    item.title, item.creator, naver_client_id, naver_client_secret
+                )
             else:
-                # ✅ Met 검색 성공률 강화(작가명도 함께 전달)
-                item.image = fetch_met_artwork(item.title, artist=item.creator)
+                item.image = fetch_naver_art_image(
+                    item.title, item.creator, naver_client_id, naver_client_secret
+                )
 
             item.image = item.image or placeholder_image(item.title)
             items.append(item)
@@ -450,8 +467,8 @@ if mode == "연관 검색":
 
 엄격 규칙:
 - 음악은 반드시 앨범 단위로만 추천 (곡/트랙 금지). title에는 '앨범명'만.
-- 미술 title에는 가능하면 영문 제목을 괄호로 병기. 예: 절규 (The Scream)
 - reason에는 '추천 이유'와 '감상 포인트'를 모두 포함.
+- 너무 길지 않게: 5~8줄 정도로 간결하게.
 
 형식(키 이름/구조 그대로):
 {{
@@ -473,13 +490,19 @@ if mode == "연관 검색":
             item = Item(cat, r["title"], r["creator"], r["reason"])
 
             if cat == "도서":
-                item.image = fetch_kakao_book(item.title, kakao_key)
+                item.image = fetch_naver_book_image(
+                    item.title, item.creator, naver_client_id, naver_client_secret
+                )
             elif cat == "음악":
                 item.image = fetch_lastfm(item.creator, item.title, lastfm_key)
             elif cat == "영화":
-                item.image = fetch_tmdb(item.title, tmdb_key)
+                item.image = fetch_naver_movie_image(
+                    item.title, item.creator, naver_client_id, naver_client_secret
+                )
             else:
-                item.image = fetch_met_artwork(item.title, artist=item.creator)
+                item.image = fetch_naver_art_image(
+                    item.title, item.creator, naver_client_id, naver_client_secret
+                )
 
             item.image = item.image or placeholder_image(item.title)
             items.append(item)
